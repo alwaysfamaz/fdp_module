@@ -47,16 +47,82 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 /* define update */
 void nvme_fm_pid_update(void)
 {
+    struct timespec current_time;
+    uint64_t        cur_id[_FM_UPDATE_BATCH_SZ];
+    
     write_lock(&admin_q_lock);
+
+    struct nvme_fm_admin_node* cur = admin_q->head;
+
+    while(cur != NULL)
+    {
+        struct nvme_fm_circular_queue* cur_q = cur->sub_q;
+
+        uint32_t valid_count = 0;
+        
+        for(uint32_t i = 0; i < _FM_UPDATE_BATCH_SZ; i++)
+        {
+            cur_id[i] = nvme_fm_circular_pop_chnk(cur_q);
+
+            if(cur_id[i] >= num_chnk) break;
+
+            valid_count += 1;
+        }
+
+        for(uint32_t i = 0; i < valid_count; i++)
+        {
+            uint64_t             id         =  cur_id[i];
+            uint32_t*            cur_fm_pid = &(fm_pids[id]);
+            struct nvme_fm_chnk* cur_chnk   = &(chnks[id]);
+        
+            clock_gettime(CLOCK_MONOTONIC, &current_time);
+
+            cur_chnk->access_cnt += 1;
+            cur_chnk->real_cnt   += 1;
+            cur_chnk->interval   =  nvme_time_diff(cur_chnk->access_time, current_time);
+
+            uint64_t interval       = cur_chnk->interval;
+            uint32_t recency_weight = 1 << interval / decay_period;
+
+            cur_chnk->access_cnt /= recency_weight;
+            uint32_t access_cnt  =  cur_chnk->access_cnt;
+            uint32_t ruh_id      =  1;
+
+            // log2(access_cnt)
+            if (access_cnt > 0 && ruh_id < _FM_MAX_RUH) 
+                while ((1U << ruh_id) <= access_cnt) ruh_id++;
+
+            *cur_fm_pid = ruh_id;
+
+            cur_chnk->access_time = current_time;
+
+            #ifdef fm_STAT
+            // for stat
+            struct nvme_fm_chnk* stat_chnk = (struct nvme_fm_chnk*)malloc(sizeof(struct nvme_fm_chnk));
+
+            stat_chnk->fm_pid    = *cur_fm_pid;
+            stat_chnk->chnk_id    =  cur_chnk->chnk_id;
+            stat_chnk->interval   =  cur_chnk->interval;
+            stat_chnk->real_cnt   =  cur_chnk->real_cnt;
+            stat_chnk->access_cnt =  cur_chnk->access_cnt;
+
+            nvme_fm_push_chnk(cur->stat_q, stat_chnk);
+            #endif
+        }
+
+        cur = cur->next;
+    }
+
     write_unlock(&admin_q_lock);
+    return;    
 }
 
 /* Init ud */ // Need to modify
 struct nvme_fm_admin_node* nvme_fm_td_init(void)
 {
-    struct nvme_sfr_admin_node* ret = kmalloc(sizeof(struct nvme_sfr_admin_node), GFP_KERNEL);
+    struct nvme_fm_admin_node* ret = kmalloc(sizeof(struct nvme_fm_admin_node), GFP_KERNEL);
 
-    ret->sub_q        = kmalloc(sizeof(struct nvme_sfr_circular_queue), GFP_KERNEL);
+    ret->sub_q        = kmalloc(sizeof(struct nvme_fm_circular_queue), GFP_KERNEL);
     ret->sub_q->front = 0;
     ret->sub_q->rear  = 0;
 
@@ -81,8 +147,8 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
     write_unlock(&admin_q_lock);
 
 
-    #ifdef SFR_STAT
-    ret->stat_q = kmalloc(sizeof(struct nvme_sfr_queue), GFP_KERNEL);
+    #ifdef fm_STAT
+    ret->stat_q = kmalloc(sizeof(struct nvme_fm_queue), GFP_KERNEL);
 
     ret->stat_q->head = NULL;
     ret->stat_q->tail = NULL;
