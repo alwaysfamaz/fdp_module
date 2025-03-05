@@ -6,6 +6,10 @@
 #include <linux/slab.h>
 #include <linux/nvme.h>
 #include <linux/sched.h>
+#include <linux/moduleparam.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/slab.h>
 #include "fdp_module.h"
 
 /* TODO: to decision the decay time */
@@ -20,13 +24,13 @@ void nvme_fm_dp_decision(void)
 uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 {
     struct nvme_fm_admin_node*     td    = td;     // Need to modify
-    struct nvme_fm_circular_queue* sub_q = sub_q;  // Need to modify
+    struct nvme_fm_circular_queue* sub_q = td->sub_q;  // Need to modify
 
     uint64_t chnk_id = slba * _FM_LBA_SZ / _FM_CHNK_SZ;
     uint16_t pid;
 
     if(slba == td->prev_lba)
-        pid = td->prev_ruhid;
+        pid =  td->prev_ruhid;
 
     else
     {
@@ -43,9 +47,49 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 /* define update */
 void nvme_fm_pid_update(void)
 {
-    
+    write_lock(&admin_q_lock);
+    write_unlock(&admin_q_lock);
 }
 
+/* Init ud */ // Need to modify
+struct nvme_fm_admin_node* nvme_fm_td_init(void)
+{
+    struct nvme_sfr_admin_node* ret = kmalloc(sizeof(struct nvme_sfr_admin_node), GFP_KERNEL);
+
+    ret->sub_q        = kmalloc(sizeof(struct nvme_sfr_circular_queue), GFP_KERNEL);
+    ret->sub_q->front = 0;
+    ret->sub_q->rear  = 0;
+
+    ret->prev = NULL;
+    ret->next = NULL;
+
+    ret->prev_ruhid = 1;
+
+    write_lock(&admin_q_lock);
+
+    if(admin_q->tail) 
+    {
+        ret->prev = admin_q->tail;
+        admin_q->tail->next = ret;
+    } 
+
+    else 
+        admin_q->head = ret;
+
+    admin_q->tail = ret;
+
+    write_unlock(&admin_q_lock);
+
+
+    #ifdef SFR_STAT
+    ret->stat_q = kmalloc(sizeof(struct nvme_sfr_queue), GFP_KERNEL);
+
+    ret->stat_q->head = NULL;
+    ret->stat_q->tail = NULL;
+    #endif
+
+    return ret;
+}
 
 /* define thread */
 void* fm_update_thread(void*)
@@ -54,7 +98,7 @@ void* fm_update_thread(void*)
     {
         if(chnks)
             nvme_fm_pid_update(); 
-            ssleep(1);
+            // ssleep(1);
     }
 
     return NULL;
@@ -75,9 +119,29 @@ static int handler_pre(struct kprobe* p, struct pt_regs* regs)
 }
 
 /* mudule init */
+static char dev_info_str[100] = "";
+module_param_string(dev_info, dev_info_str, sizeof(dev_info_str), 0644);
+MODULE_PARM_DESC(dev_info, "Device info: tbytes:lba_sz:chnk_sz:max_ruh:decay_period");
+
 static int __init fdp_module_init(void)
 {
     int ret, i;
+
+    printk(KERN_INFO "Module init: Received dev_info_str = %s\n", dev_info_str);
+    ret = sscanf(dev_info_str, "%llu:%llu:%llu:%hu:%llu",
+                 &dev_info.tbytes, &dev_info.lba_sz, &dev_info.chnk_sz,
+                 &dev_info.max_ruh, &dev_info.decay_period);
+    if (ret != 5) {
+        printk(KERN_ERR "Invalid dev_info format! Expected: tbytes:lba_sz:chnk_sz:max_ruh:decay_period\n");
+        return -EINVAL;
+    }
+
+    printk(KERN_INFO "Parsed dev_info:\n");
+    printk(KERN_INFO "  tbytes       = %llu\n", dev_info.tbytes);
+    printk(KERN_INFO "  lba_sz       = %llu\n", dev_info.lba_sz);
+    printk(KERN_INFO "  chnk_sz      = %llu\n", dev_info.chnk_sz);
+    printk(KERN_INFO "  max_ruh      = %hu\n", dev_info.max_ruh);
+    printk(KERN_INFO "  decay_period = %llu\n", dev_info.decay_period);
 
     num_chnk =  _FM_DEV_SZ/_FM_CHNK_SZ + 1;
     chnks    = kmalloc(num_chnk * sizeof(struct nvme_fm_chnk), GFP_KERNEL);
@@ -99,7 +163,7 @@ static int __init fdp_module_init(void)
         fm_pids[i] = 1;
     }
 
-    admin_q = kmalloc(sizeof(struct nvme_fm_admin_q));
+    admin_q = kmalloc(sizeof(struct nvme_fm_admin_q), GFP_KERNEL);
     if(!admin_q) return -ENOMEM;
 
     admin_q->head = NULL;
@@ -112,7 +176,7 @@ static int __init fdp_module_init(void)
         return PTR_ERR(update_thread);
     }
 
-    kp.symbol_name = "nvme_setup_rw"
+    kp.symbol_name = "nvme_setup_rw";
     kp.pre_handler = handler_pre;
 
     ret = register_kprobe(&kp);
@@ -134,7 +198,7 @@ static int __init fdp_module_init(void)
 }
 
 /* module exit */
-static void __exit fdp_module_init(void)
+static void __exit fdp_module_exit(void)
 {
     if(update_thread)
         kthread_stop(update_thread);

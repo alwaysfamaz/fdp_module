@@ -32,26 +32,24 @@
 #define _FM_UPDATE_BATCH_SZ  1U
 
 /* For use fm */ 
-// static rwlock_t thread_lock; 
 static struct nvme_fm_admin_q* admin_q;       __attribute__((unused));
+static struct nvme_dev_info*   dev;           __attribute__((unused));
 static struct nvme_fm_chnk*    chnks;         __attribute__((unused));
 static struct task_struct*     update_thread; __attribute__((unused));
 static struct kprobe           kp;            __attribute__((unused));
-static uint32_t*               fm_pids;       __attribute__((unused));
+static uint16_t*               fm_pids;       __attribute__((unused));
 static uint64_t                decay_period;  __attribute__((unused));
-static uint32_t                num_chnk;      __attribute__((unused));
+static uint64_t                num_chnk;      __attribute__((unused));
+static rwlock_t                admin_q_lock;  __attribute__((unused));
 
-// struct nvme_fm_attr
-// {
-//     uint64_t decay_period;
-
-//     struct nvme_fm_chnk* chnks;
-//     uint32_t*            fm_pids;
-
-//     uint32_t num_chnk;
-
-//     struct nvme_fm_admin_q* admin_q;
-// };
+struct nvme_dev_info
+{
+    uint64_t tbytes;       // bytes
+    uint64_t lba_sz;       // bytes
+    uint64_t chnk_sz;      // bytes
+    uint16_t max_ruh;    
+    uint64_t decay_period; // seconds
+}
 
 struct nvme_fm_chnk
 {
