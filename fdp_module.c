@@ -8,11 +8,16 @@
 #include <linux/sched.h>
 #include "fdp_module.h"
 
-/*  */
+/* TODO: to decision the decay time */
+void nvme_fm_dp_decision(void)
+{
+    decay_period = _FM_DECAY_PERIOD * 1e9; // sec * 1e9
 
+    return;
+}
 
 /* get pid */
-uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t nblocks)
+uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 {
     struct nvme_fm_admin_node*     td    = td;     // Need to modify
     struct nvme_fm_circular_queue* sub_q = sub_q;  // Need to modify
@@ -25,11 +30,11 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t nblocks)
 
     else
     {
-        pid = g_fm->fm_pids[chnk_id];
+        pid = fm_pids[chnk_id];
         nvme_fm_circular_push_chnk(sub_q, chnk_id);
     }
 
-    td->prev_lba = slba + nblocks;
+    td->prev_lba   = slba + length;
     td->prev_ruhid = pid;
 
     return pid;
@@ -47,8 +52,8 @@ void* fm_update_thread(void*)
 {
     while(!kthread_should_stop())
     {
-        if(g_fm)
-            nvme_fm_update(); 
+        if(chnks)
+            nvme_fm_pid_update(); 
             ssleep(1);
     }
 
@@ -74,34 +79,31 @@ static int __init fdp_module_init(void)
 {
     int ret, i;
 
-    g_fm = kmalloc(sizeof(struct nvme_fm_attr), GFP_KERNEL);
-    if(!g_fm)   return -ENOMEM;
+    num_chnk =  _FM_DEV_SZ/_FM_CHNK_SZ + 1;
+    chnks    = kmalloc(num_chnk * sizeof(struct nvme_fm_chnk), GFP_KERNEL);
+    if(!chnks) return -ENOMEM;
+    fm_pids  = kmalloc(num_chnk * sizeof(uint32_t), GFP_KERNEL);
+    if(!fm_pids) return -ENOMEM;
 
-    g_fm->num_chnk =  _FM_DEV_SZ/_FM_CHNK_SZ + 1;
-    g_fm->chnks    = kmalloc(g_fm->num_chnk * sizeof(struct nvme_fm_chnk), GFP_KERNEL);
-    if(!g_fm->chnks) return -ENOMEM;
-    g_fm->fm_pids  = kmalloc(g_fm->num_chnk * sizeof(uint32_t), GFP_KERNEL);
-    if(!g_fm->fm_pids) return -ENOMEM;
+    nvme_fm_dp_decision(void);
 
-    g_sfr->decay_period = _SFR_DECAY_PERIOD * 1e9; // sec * 1e9
-
-    for(uint64_t i = 0; i < g_fm->num_chnk; i++) 
+    for(uint64_t i = 0; i < num_chnk; i++) 
     {
-        g_fm->chnks[i].chnk_id    = i;
-        g_fm->chnks[i].real_cnt   = 0;
-        g_fm->chnks[i].access_cnt = 0;
+        chnks[i].chnk_id    = i;
+        chnks[i].real_cnt   = 0;
+        chnks[i].access_cnt = 0;
 
-        g_fm->chnks[i].access_time.tv_sec  = current_time.tv_sec;
-        g_fm->chnks[i].access_time.tv_nsec = current_time.tv_nsec;
-        
-        g_fm->fm_pids[i] = 1;
+        chnks[i].access_time.tv_sec  = current_time.tv_sec;
+        chnks[i].access_time.tv_nsec = current_time.tv_nsec;
+
+        fm_pids[i] = 1;
     }
 
-    g_fm->admin_q = kmalloc(sizeof(struct nvme_fm_admin_q));
-    if(!g_fm->admin_q) return -ENOMEM;
+    admin_q = kmalloc(sizeof(struct nvme_fm_admin_q));
+    if(!admin_q) return -ENOMEM;
 
-    g_fm->admin_q->head = NULL;
-    g_fm->admin_q->tail = NULL;
+    admin_q->head = NULL;
+    admin_q->tail = NULL;
 
     update_thread = kthread_run(fm_update_thread, NULL, "fm_update_thread");
     if(IS_ERR(update_thread))
@@ -119,9 +121,8 @@ static int __init fdp_module_init(void)
         printk(KERN_ERR "Failed to register kprobe: %d\n", ret);
         kthread_stop(update_thread);
 
-        kfree(g_fm->chnks);
-        kfree(g_fm->pids);
-        kfree(g_fm);
+        kfree(chnks);
+        kfree(fm_pids);
 
         return ret;
     }
@@ -140,9 +141,8 @@ static void __exit fdp_module_init(void)
 
     unregister_kprobe(&kp);
 
-    kfree(g_fm->chnks);
-    kfree(g_fm->pids);
-    kfree(g_fm);
+    kfree(chnks);
+    kfree(fm_pids);
 
     printk(KERN_INFO "FDP Module unloaded\n");
 }
