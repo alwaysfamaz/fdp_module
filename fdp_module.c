@@ -44,7 +44,7 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
     return pid;
 }
 
-/* define update */
+/* Update Placement IDs */
 void nvme_fm_pid_update(void)
 {
     struct timespec current_time;
@@ -89,7 +89,7 @@ void nvme_fm_pid_update(void)
             uint32_t ruh_id      =  1;
 
             // log2(access_cnt)
-            if (access_cnt > 0 && ruh_id < _FM_MAX_RUH) 
+            if (access_cnt > 0 && ruh_id < dev_info.max_ruh) 
                 while ((1U << ruh_id) <= access_cnt) ruh_id++;
 
             *cur_fm_pid = ruh_id;
@@ -100,7 +100,7 @@ void nvme_fm_pid_update(void)
             // for stat
             struct nvme_fm_chnk* stat_chnk = (struct nvme_fm_chnk*)malloc(sizeof(struct nvme_fm_chnk));
 
-            stat_chnk->fm_pid    = *cur_fm_pid;
+            stat_chnk->fm_pid     = *cur_fm_pid;
             stat_chnk->chnk_id    =  cur_chnk->chnk_id;
             stat_chnk->interval   =  cur_chnk->interval;
             stat_chnk->real_cnt   =  cur_chnk->real_cnt;
@@ -117,7 +117,7 @@ void nvme_fm_pid_update(void)
     return;    
 }
 
-/* Init ud */ // Need to modify
+/* Init td */ // Need to modify
 struct nvme_fm_admin_node* nvme_fm_td_init(void)
 {
     struct nvme_fm_admin_node* ret = kmalloc(sizeof(struct nvme_fm_admin_node), GFP_KERNEL);
