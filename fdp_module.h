@@ -33,7 +33,7 @@
 
 /* For use fm */ 
 static struct nvme_fm_admin_q* admin_q;       __attribute__((unused));
-static struct nvme_dev_info*   dev;           __attribute__((unused));
+static struct nvme_dev_info    dev_info;      __attribute__((unused));
 static struct nvme_fm_chnk*    chnks;         __attribute__((unused));
 static struct task_struct*     update_thread; __attribute__((unused));
 static struct kprobe           kp;            __attribute__((unused));

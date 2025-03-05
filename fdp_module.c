@@ -15,7 +15,7 @@
 /* TODO: to decision the decay time */
 void nvme_fm_dp_decision(void)
 {
-    decay_period = _FM_DECAY_PERIOD * 1e9; // sec * 1e9
+    decay_period = dev_info.decay_period * 1e9; // sec * 1e9
 
     return;
 }
@@ -26,7 +26,7 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
     struct nvme_fm_admin_node*     td    = td;     // Need to modify
     struct nvme_fm_circular_queue* sub_q = td->sub_q;  // Need to modify
 
-    uint64_t chnk_id = slba * _FM_LBA_SZ / _FM_CHNK_SZ;
+    uint64_t chnk_id = slba * dev_info.lba_sz / dev_info.chnk_sz;
     uint16_t pid;
 
     if(slba == td->prev_lba)
@@ -136,14 +136,14 @@ static int __init fdp_module_init(void)
         return -EINVAL;
     }
 
-    printk(KERN_INFO "Parsed dev_info:\n");
+    printk(KERN_INFO "Device information:\n");
     printk(KERN_INFO "  tbytes       = %llu\n", dev_info.tbytes);
     printk(KERN_INFO "  lba_sz       = %llu\n", dev_info.lba_sz);
     printk(KERN_INFO "  chnk_sz      = %llu\n", dev_info.chnk_sz);
     printk(KERN_INFO "  max_ruh      = %hu\n", dev_info.max_ruh);
     printk(KERN_INFO "  decay_period = %llu\n", dev_info.decay_period);
 
-    num_chnk =  _FM_DEV_SZ/_FM_CHNK_SZ + 1;
+    num_chnk =  dev_info.tbytes/dev_info.chnk_sz + 1;
     chnks    = kmalloc(num_chnk * sizeof(struct nvme_fm_chnk), GFP_KERNEL);
     if(!chnks) return -ENOMEM;
     fm_pids  = kmalloc(num_chnk * sizeof(uint32_t), GFP_KERNEL);
@@ -172,7 +172,6 @@ static int __init fdp_module_init(void)
     update_thread = kthread_run(fm_update_thread, NULL, "fm_update_thread");
     if(IS_ERR(update_thread))
     {
-        kfree(g_fm);
         return PTR_ERR(update_thread);
     }
 
