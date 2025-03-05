@@ -21,13 +21,13 @@
 /* Parameters */
 #define _FM_WDSZ             4U             
 // #define _FM_DEV_SZ           107373363200ULL // NVMeVirt (128GB)
-#define _FM_DEV_SZ           1000204886016ULL // Real device (1TB)  
-#define _FM_LBA_SZ           512ULL
-#define _FM_CHNK_SZ          (2*1024*1024ULL) // 2MiB
-#define _FM_MAX_RUH          15U              // 16 (0~15)
+// #define _FM_DEV_SZ           1000204886016ULL // Real device (1TB)  
+// #define _FM_LBA_SZ           512ULL
+// #define _FM_CHNK_SZ          (2*1024*1024ULL) // 2MiB
+// #define _FM_MAX_RUH          15U              // 16 (0~15)
 #define _FM_QUEUE_SZ         256U
 #define _FM_DEAD_VALUE       0xDEADBEEF       // magic number
-#define _FM_DECAY_PERIOD     10ULL            // sec
+// #define _FM_DECAY_PERIOD     10ULL            // sec
 #define _FM_MAX_THREAD_NUM   8U
 #define _FM_UPDATE_BATCH_SZ  1U
 
@@ -53,7 +53,7 @@ struct nvme_dev_info
 
 struct nvme_fm_chnk
 {
-    #ifdef fm_STAT
+    #ifdef FM_STAT
     uint32_t fm_pid;
     #endif
 
@@ -113,6 +113,9 @@ void     nvme_fm_circular_push_chnk(struct nvme_fm_circular_queue* q, uint64_t c
 
 uint64_t nvme_time_diff(struct timespec t1, struct timespec t2);
 
+/* TODO: to decision the decay time */
+void     nvme_fm_dp_decision(void);
+
 #ifdef FM_STAT
 
 struct nvme_fm_node
@@ -132,8 +135,5 @@ struct nvme_fm_chnk* nvme_fm_pop_chnk(struct nvme_fm_queue* q);
 void                 nvme_fm_push_chnk(struct nvme_fm_queue* q, struct nvme_fm_chnk* chnk);
 
 #endif
-
-/* TODO: to decision the decay time */
-void     nvme_fm_dp_decision(void);
 
 #endif /* __NVME_FM_H__ */

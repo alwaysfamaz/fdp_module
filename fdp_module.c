@@ -12,7 +12,7 @@
 #include <linux/slab.h>
 #include "fdp_module.h"
 
-/* TODO: to decision the decay time */
+/* TODO: To decision the decay time */
 void nvme_fm_dp_decision(void)
 {
     decay_period = dev_info.decay_period * 1e9; // sec * 1e9
@@ -20,7 +20,56 @@ void nvme_fm_dp_decision(void)
     return;
 }
 
-/* get pid */
+/* Return interval (nsec) */
+uint64_t nvme_time_diff(struct timespec t1, struct timespec t2) 
+{
+    return (t2.tv_nsec >= t1.tv_nsec) 
+            ? (t2.tv_sec - t1.tv_sec) * 1e9 + (t2.tv_nsec - t1.tv_nsec)
+            : (t2.tv_sec - t1.tv_sec - 1) * 1e9 + (1e9 + t2.tv_nsec - t1.tv_nsec);
+}
+
+/* For circular queue (lock-free) */ 
+void nvme_fm_circular_push_chnk(struct nvme_fm_circular_queue* q, uint64_t chnk_id) 
+{
+    uint32_t rear, next_rear;
+    // uint32_t f = 0; // to check overhead
+
+    do 
+    {
+        rear = atomic_load(&q->rear);
+        next_rear = (rear + 1) % _fm_QUEUE_SZ;
+
+        // Queue is full -> busy wait
+        if (next_rear == atomic_load(&q->front))    continue; // busy wait
+
+    } while(!atomic_compare_exchange_weak(&q->rear, &rear, next_rear));
+
+    q->queue[rear] = chnk_id;
+
+    return;
+}
+
+/* For circular queue (lock-free) */ 
+uint64_t nvme_fm_circular_pop_chnk(struct nvme_fm_circular_queue* q) 
+{
+    uint32_t front, new_front;
+
+    do 
+    {
+        front = atomic_load(&q->front);
+
+        // Queue is empty
+        if (front == atomic_load(&q->rear))
+            return _fm_DEAD_VALUE;
+        
+        new_front = (front + 1) % _fm_QUEUE_SZ;
+
+    } while(!atomic_compare_exchange_weak(&q->front, &front, new_front));
+
+    return q->queue[front];
+}
+
+/* Get pid */
 uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 {
     struct nvme_fm_admin_node*     td    = td;     // Need to modify
@@ -44,6 +93,53 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
     return pid;
 }
 
+#ifdef fm_STAT
+/* For queue */
+void nvme_fm_push_chnk(struct nvme_fm_queue* q, struct nvme_fm_chnk* chnk)
+{
+    struct nvme_fm_node* temp = (struct nvme_fm_node*)malloc(sizeof(struct nvme_fm_node));
+
+    temp->chnk = chnk;
+    temp->next = NULL;
+
+    if(q->head == NULL && q->tail == NULL) 
+    {
+        q->head = temp;
+        q->tail = temp;
+        
+        return;
+    }
+
+    q->tail->next = temp;
+    q->tail       = temp;
+
+    return;
+}
+
+/* For queue */
+struct nvme_fm_chnk* nvme_fm_pop_chnk(struct nvme_fm_queue* q)
+{
+    if(q->head == NULL && q->tail == NULL)  return NULL; 
+
+    struct nvme_fm_chnk* ret  = q->head->chnk;
+    struct nvme_fm_node* temp = q->head;
+
+    if(q->head == q->tail)
+    {
+        q->head = NULL;
+        q->tail = NULL;
+
+        free(temp);
+        return ret;
+    }
+
+    q->head = q->head->next;
+
+    free(temp);    
+    return ret;
+}
+#endif
+
 /* Update Placement IDs */
 void nvme_fm_pid_update(void)
 {
@@ -63,7 +159,6 @@ void nvme_fm_pid_update(void)
         for(uint32_t i = 0; i < _FM_UPDATE_BATCH_SZ; i++)
         {
             cur_id[i] = nvme_fm_circular_pop_chnk(cur_q);
-
             if(cur_id[i] >= num_chnk) break;
 
             valid_count += 1;
@@ -96,8 +191,8 @@ void nvme_fm_pid_update(void)
 
             cur_chnk->access_time = current_time;
 
-            #ifdef fm_STAT
-            // for stat
+            // For stat
+            #ifdef FM_STAT
             struct nvme_fm_chnk* stat_chnk = (struct nvme_fm_chnk*)malloc(sizeof(struct nvme_fm_chnk));
 
             stat_chnk->fm_pid     = *cur_fm_pid;
@@ -114,6 +209,7 @@ void nvme_fm_pid_update(void)
     }
 
     write_unlock(&admin_q_lock);
+
     return;    
 }
 
@@ -121,8 +217,11 @@ void nvme_fm_pid_update(void)
 struct nvme_fm_admin_node* nvme_fm_td_init(void)
 {
     struct nvme_fm_admin_node* ret = kmalloc(sizeof(struct nvme_fm_admin_node), GFP_KERNEL);
+    if(!ret) return -ENOMEM;
 
     ret->sub_q        = kmalloc(sizeof(struct nvme_fm_circular_queue), GFP_KERNEL);
+    if(!ret->sub_q) return -ENOMEM;
+
     ret->sub_q->front = 0;
     ret->sub_q->rear  = 0;
 
@@ -135,7 +234,7 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
 
     if(admin_q->tail) 
     {
-        ret->prev = admin_q->tail;
+        ret->prev           = admin_q->tail;
         admin_q->tail->next = ret;
     } 
 
@@ -146,8 +245,7 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
 
     write_unlock(&admin_q_lock);
 
-
-    #ifdef fm_STAT
+    #ifdef FM_STAT
     ret->stat_q = kmalloc(sizeof(struct nvme_fm_queue), GFP_KERNEL);
 
     ret->stat_q->head = NULL;
@@ -155,6 +253,35 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
     #endif
 
     return ret;
+}
+
+/* Dispose td */
+void nvme_fm_td_dispose(struct nvme_fm_admin_node* fm_td)
+{
+    struct nvme_fm_admin_node* cur_node = fm_td;
+    
+    write_lock(&admin_q_lock);
+    if (cur_node->prev)
+        cur_node->prev->next = cur_node->next;
+    else
+        g_fm->admin_q->head = cur_node->next;
+
+    if (cur_node->next)
+        cur_node->next->prev = cur_node->prev;
+    else
+        g_fm->admin_q->tail = cur_node->prev;
+
+    write_unlock(&admin_q_lock);
+
+    #ifdef fm_STAT
+    nvme_fm_stat(cur_node->stat_q);
+    kfree(cur_node->stat_q);
+    #endif
+    
+    kfree(cur_node->sub_q);
+    kfree(cur_node);
+
+    return;
 }
 
 /* define thread */
@@ -174,17 +301,17 @@ void* fm_update_thread(void*)
 static int handler_pre(struct kprobe* p, struct pt_regs* regs)
 {
     struct nvme_command* cmd;
-    uint16_t pid;
+    uint16_t             pid;
     
     cmd = (struct nvme_command*)regs->si;
-
     pid = nvme_get_fm_pid(cmd->slba, cmd->length);
+
     cmd->dspec = pid;
 
     return 0;
 }
 
-/* mudule init */
+/* Module init */
 static char dev_info_str[100] = "";
 module_param_string(dev_info, dev_info_str, sizeof(dev_info_str), 0644);
 MODULE_PARM_DESC(dev_info, "Device info: tbytes:lba_sz:chnk_sz:max_ruh:decay_period");
@@ -197,7 +324,9 @@ static int __init fdp_module_init(void)
     ret = sscanf(dev_info_str, "%llu:%llu:%llu:%hu:%llu",
                  &dev_info.tbytes, &dev_info.lba_sz, &dev_info.chnk_sz,
                  &dev_info.max_ruh, &dev_info.decay_period);
-    if (ret != 5) {
+
+    if (ret != 5) 
+    {
         printk(KERN_ERR "Invalid dev_info format! Expected: tbytes:lba_sz:chnk_sz:max_ruh:decay_period\n");
         return -EINVAL;
     }
@@ -209,13 +338,13 @@ static int __init fdp_module_init(void)
     printk(KERN_INFO "  max_ruh      = %hu\n", dev_info.max_ruh);
     printk(KERN_INFO "  decay_period = %llu\n", dev_info.decay_period);
 
-    num_chnk =  dev_info.tbytes/dev_info.chnk_sz + 1;
+    num_chnk = dev_info.tbytes/dev_info.chnk_sz + 1;
     chnks    = kmalloc(num_chnk * sizeof(struct nvme_fm_chnk), GFP_KERNEL);
     if(!chnks) return -ENOMEM;
     fm_pids  = kmalloc(num_chnk * sizeof(uint32_t), GFP_KERNEL);
     if(!fm_pids) return -ENOMEM;
 
-    nvme_fm_dp_decision(void);
+    nvme_fm_dp_decision();
 
     for(uint64_t i = 0; i < num_chnk; i++) 
     {
@@ -236,10 +365,7 @@ static int __init fdp_module_init(void)
     admin_q->tail = NULL;
 
     update_thread = kthread_run(fm_update_thread, NULL, "fm_update_thread");
-    if(IS_ERR(update_thread))
-    {
-        return PTR_ERR(update_thread);
-    }
+    if(IS_ERR(update_thread))   return PTR_ERR(update_thread);
 
     kp.symbol_name = "nvme_setup_rw";
     kp.pre_handler = handler_pre;
@@ -258,11 +384,10 @@ static int __init fdp_module_init(void)
 
     printk(KERN_INFO "FDP Module loaded: update_thread and nvme_setup_rw hooking\n");
 
-
     return 0;
 }
 
-/* module exit */
+/* Module exit */
 static void __exit fdp_module_exit(void)
 {
     if(update_thread)
