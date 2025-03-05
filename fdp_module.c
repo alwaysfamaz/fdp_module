@@ -1,15 +1,3 @@
-#include <linux/module.h>
-#include <linux/kprobes.h>
-#include <linux/kthread.h>
-#include <linux/delay.h>
-#include <linux/rwlock.h>
-#include <linux/slab.h>
-#include <linux/nvme.h>
-#include <linux/sched.h>
-#include <linux/moduleparam.h>
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/slab.h>
 #include "fdp_module.h"
 
 /* TODO: To decision the decay time */
