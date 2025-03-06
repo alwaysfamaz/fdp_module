@@ -308,9 +308,12 @@ static int handler_pre(struct kprobe* p, struct pt_regs* regs)
     uint16_t             pid;
     
     cmd = (struct nvme_rw_command*)regs->si;
-    pid = nvme_get_fm_pid(cmd->slba, cmd->length);
 
-    cmd->dspec = pid;
+    if (cmd->opcode == 0x01) 
+    {
+        pid = nvme_get_fm_pid(cmd->slba, cmd->length);
+        cmd->dspec = pid;
+    }
 
     return 0;
 }
@@ -372,7 +375,7 @@ static int __init fdp_module_init(void)
     update_thread = kthread_run(fm_update_thread, NULL, "fm_update_thread");
     if(IS_ERR(update_thread))   return PTR_ERR(update_thread);
 
-    kp.symbol_name = "nvme_setup_rw";
+    kp.symbol_name = "nvme_setup_cmd";
     kp.pre_handler = handler_pre;
 
     ret = register_kprobe(&kp);
