@@ -3,42 +3,37 @@
 /* TODO: To decision the decay time */
 void nvme_fm_dp_decision(void)
 {
-    decay_period = dev_info.decay_period * 1e9; // sec * 1e9
-
-    return;
+    decay_period = dev_info.decay_period * 1000000000ULL;
 }
 
+
 /* Return interval (nsec) */
-uint64_t nvme_time_diff(struct timespec t1, struct timespec t2) 
+uint64_t nvme_time_diff(struct timespec64 t1, struct timespec64 t2) 
 {
     return (t2.tv_nsec >= t1.tv_nsec) 
-            ? (t2.tv_sec - t1.tv_sec) * 1e9 + (t2.tv_nsec - t1.tv_nsec)
-            : (t2.tv_sec - t1.tv_sec - 1) * 1e9 + (1e9 + t2.tv_nsec - t1.tv_nsec);
+            ? (t2.tv_sec - t1.tv_sec) * 1000000000ULL + (t2.tv_nsec - t1.tv_nsec)
+            : (t2.tv_sec - t1.tv_sec - 1) * 1000000000ULL + (1000000000ULL + t2.tv_nsec - t1.tv_nsec);
 }
 
 /* For circular queue (lock-free) */ 
 void nvme_fm_circular_push_chnk(struct nvme_fm_circular_queue* q, uint64_t chnk_id) 
 {
     uint32_t rear, next_rear;
-    // uint32_t f = 0; // to check overhead
 
     do 
     {
-        rear = atomic_load(&q->rear);
+        rear = atomic_read(&q->rear);
         next_rear = (rear + 1) % _FM_QUEUE_SZ;
 
-        // Queue is full -> busy wait
-        if (next_rear == atomic_load(&q->front))
+        if (next_rear == atomic_read(&q->front))
         {
             cpu_relax();
-            continue; // busy wait
+            continue;
         }    
 
-    } while(!atomic_compare_exchange_weak(&q->rear, &rear, next_rear));
+    } while(atomic_cmpxchg(&q->rear, rear, next_rear) != rear);
 
     q->queue[rear] = chnk_id;
-
-    return;
 }
 
 /* For circular queue (lock-free) */ 
@@ -48,24 +43,24 @@ uint64_t nvme_fm_circular_pop_chnk(struct nvme_fm_circular_queue* q)
 
     do 
     {
-        front = atomic_load(&q->front);
+        front = atomic_read(&q->front);
 
         // Queue is empty
-        if (front == atomic_load(&q->rear))
+        if (front == atomic_read(&q->rear))
             return _FM_DEAD_VALUE;
         
-        new_front = (front + 1) % _fm_QUEUE_SZ;
+        new_front = (front + 1) % _FM_QUEUE_SZ;
 
-    } while(!atomic_compare_exchange_weak(&q->front, &front, new_front));
+    } while(atomic_cmpxchg(&q->front, front, new_front) != front);
 
     return q->queue[front];
 }
 
-#ifdef fm_STAT
+#ifdef FM_STAT
 /* For queue */
 void nvme_fm_push_chnk(struct nvme_fm_queue* q, struct nvme_fm_chnk* chnk)
 {
-    struct nvme_fm_node* temp = (struct nvme_fm_node*)malloc(sizeof(struct nvme_fm_node));
+    struct nvme_fm_node* temp = kmalloc(sizeof(struct nvme_fm_node), GFP_KERNEL);
 
     temp->chnk = chnk;
     temp->next = NULL;
@@ -97,13 +92,13 @@ struct nvme_fm_chnk* nvme_fm_pop_chnk(struct nvme_fm_queue* q)
         q->head = NULL;
         q->tail = NULL;
 
-        free(temp);
+        kfree(temp);
         return ret;
     }
 
     q->head = q->head->next;
 
-    free(temp);    
+    kfree(temp);    
     return ret;
 }
 #endif
@@ -143,8 +138,8 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
 /* Update Placement IDs */
 void nvme_fm_pid_update(void)
 {
-    struct timespec current_time;
-    uint64_t        cur_id[_FM_UPDATE_BATCH_SZ];
+    struct timespec64 current_time;
+    uint64_t          cur_id[_FM_UPDATE_BATCH_SZ];
 
     read_lock(&admin_q_lock);
     struct nvme_fm_admin_node* cur = admin_q->head;
@@ -167,10 +162,10 @@ void nvme_fm_pid_update(void)
         for(uint32_t i = 0; i < valid_count; i++)
         {
             uint64_t             id         =  cur_id[i];
-            uint32_t*            cur_fm_pid = &(fm_pids[id]);
+            uint16_t*            cur_fm_pid = &(fm_pids[id]);
             struct nvme_fm_chnk* cur_chnk   = &(chnks[id]);
         
-            clock_gettime(CLOCK_MONOTONIC, &current_time);
+            ktime_get_ts64(&current_time);
 
             cur_chnk->access_cnt += 1;
             cur_chnk->real_cnt   += 1;
@@ -183,10 +178,6 @@ void nvme_fm_pid_update(void)
             uint32_t access_cnt  =  cur_chnk->access_cnt;
 
             // log2(access_cnt)
-            // if (access_cnt > 0 && ruh_id < dev_info.max_ruh) 
-            //     while ((1U << ruh_id) <= access_cnt) ruh_id++;
-
-            // log2(access_cnt)
             uint32_t ruh_id = (access_cnt > 0) ? (31 - __builtin_clz(access_cnt)) : 1;
 
             *cur_fm_pid = ruh_id;
@@ -195,8 +186,8 @@ void nvme_fm_pid_update(void)
 
             // For stat
             #ifdef FM_STAT
-            struct nvme_fm_chnk* stat_chnk = kmalloc(sizeof(struct nvme_fm_chnk));
-            if(!stat_chnk) return -ENOMEM;
+            struct nvme_fm_chnk* stat_chnk = kmalloc(sizeof(struct nvme_fm_chnk), GFP_KERNEL);
+            if(!stat_chnk) return;
 
             stat_chnk->fm_pid     = *cur_fm_pid;
             stat_chnk->chnk_id    =  cur_chnk->chnk_id;
@@ -230,8 +221,8 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
         return NULL;
     } 
 
-    ret->sub_q->front = 0;
-    ret->sub_q->rear  = 0;
+    atomic_set(&ret->sub_q->front, 0);;
+    atomic_set(&ret->sub_q->rear, 0);;
 
     ret->prev = NULL;
     ret->next = NULL;
@@ -255,7 +246,7 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
 
     #ifdef FM_STAT
     ret->stat_q = kmalloc(sizeof(struct nvme_fm_queue), GFP_KERNEL);
-    if(!stat_q) return NULL;
+    if(!ret->stat_q) return NULL;
 
     ret->stat_q->head = NULL;
     ret->stat_q->tail = NULL;
@@ -274,12 +265,12 @@ void nvme_fm_td_dispose(struct nvme_fm_admin_node* fm_td)
     if (cur_node->prev)
         cur_node->prev->next = cur_node->next;
     else
-        g_fm->admin_q->head = cur_node->next;
+        admin_q->head = cur_node->next;
 
     if (cur_node->next)
         cur_node->next->prev = cur_node->prev;
     else
-        g_fm->admin_q->tail = cur_node->prev;
+        admin_q->tail = cur_node->prev;
 
     write_unlock(&admin_q_lock);
 
@@ -298,7 +289,7 @@ void nvme_fm_td_dispose(struct nvme_fm_admin_node* fm_td)
 }
 
 /* define thread */
-void* fm_update_thread(void*)
+int fm_update_thread(void* data)
 {
     while(!kthread_should_stop())
     {
@@ -307,16 +298,16 @@ void* fm_update_thread(void*)
             // ssleep(1);
     }
 
-    return NULL;
+    return 0;
 }
 
 /* nvme_setup_cmd hooking */
 static int handler_pre(struct kprobe* p, struct pt_regs* regs)
 {
-    struct nvme_command* cmd;
+    struct nvme_rw_command* cmd;
     uint16_t             pid;
     
-    cmd = (struct nvme_command*)regs->si;
+    cmd = (struct nvme_rw_command*)regs->si;
     pid = nvme_get_fm_pid(cmd->slba, cmd->length);
 
     cmd->dspec = pid;
@@ -331,7 +322,8 @@ MODULE_PARM_DESC(dev_info, "Device info: tbytes:lba_sz:chnk_sz:max_ruh:decay_per
 
 static int __init fdp_module_init(void)
 {
-    int ret, i;
+    int ret;
+    struct timespec64 current_time;
 
     printk(KERN_INFO "Module init: Received dev_info_str = %s\n", dev_info_str);
     ret = sscanf(dev_info_str, "%llu:%llu:%llu:%hu:%llu",
@@ -358,7 +350,7 @@ static int __init fdp_module_init(void)
     if(!fm_pids) return -ENOMEM;
 
     nvme_fm_dp_decision();
-
+    ktime_get_ts64(&current_time);
     for(uint64_t i = 0; i < num_chnk; i++) 
     {
         chnks[i].chnk_id    = i;
