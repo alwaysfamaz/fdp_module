@@ -2,7 +2,7 @@
 #define __FDP_MODULE_H__
 
 #ifndef FM_STAT
-#define FM_STAT
+// #define FM_STAT
 #endif
 
 #include <linux/module.h>      

@@ -115,8 +115,9 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
     }
 
     struct nvme_fm_circular_queue* sub_q = td->sub_q;  // Need to modify
+
     uint64_t chnk_id = slba * dev_info.lba_sz / dev_info.chnk_sz;
-    uint16_t pid = 0;
+    uint16_t pid     = 0;
 
     if(slba == td->prev_lba)
         pid =  td->prev_ruhid;
@@ -221,8 +222,8 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
         return NULL;
     } 
 
-    atomic_set(&ret->sub_q->front, 0);;
-    atomic_set(&ret->sub_q->rear, 0);;
+    atomic_set(&ret->sub_q->front, 0);
+    atomic_set(&ret->sub_q->rear, 0);
 
     ret->prev = NULL;
     ret->next = NULL;
@@ -295,7 +296,8 @@ int fm_update_thread(void* data)
     {
         if(chnks)
             nvme_fm_pid_update(); 
-            // ssleep(1);
+        
+        msleep(1);
     }
 
     return 0;
@@ -305,7 +307,7 @@ int fm_update_thread(void* data)
 static int handler_pre(struct kprobe* p, struct pt_regs* regs)
 {
     struct nvme_rw_command* cmd;
-    uint16_t             pid;
+    uint16_t                pid;
     
     cmd = (struct nvme_rw_command*)regs->si;
 
@@ -328,14 +330,14 @@ static int __init fdp_module_init(void)
     int ret;
     struct timespec64 current_time;
 
-    printk(KERN_INFO "Module init: Received dev_info_str = %s\n", dev_info_str);
+    printk(KERN_INFO "Module init: Received dev_info = %s\n", dev_info_str);
     ret = sscanf(dev_info_str, "%llu:%llu:%llu:%hu:%llu",
                  &dev_info.tbytes, &dev_info.lba_sz, &dev_info.chnk_sz,
                  &dev_info.max_ruh, &dev_info.decay_period);
 
     if (ret != 5) 
     {
-        printk(KERN_ERR "Invalid dev_info format! Expected: tbytes:lba_sz:chnk_sz:max_ruh:decay_period\n");
+        printk(KERN_ERR "Invalid dev_info format. Expected: tbytes:lba_sz:chnk_sz:max_ruh:decay_period\n");
         return -EINVAL;
     }
 
