@@ -1,4 +1,4 @@
-### // In development  
+### In development..  
 ## Kernel module for using FDP SSD 
 
 1. Hooking 'nvme_setup_rw'
