@@ -25,10 +25,14 @@ void nvme_fm_circular_push_chnk(struct nvme_fm_circular_queue* q, uint64_t chnk_
     do 
     {
         rear = atomic_load(&q->rear);
-        next_rear = (rear + 1) % _fm_QUEUE_SZ;
+        next_rear = (rear + 1) % _FM_QUEUE_SZ;
 
         // Queue is full -> busy wait
-        if (next_rear == atomic_load(&q->front))    continue; // busy wait
+        if (next_rear == atomic_load(&q->front))
+        {
+            cpu_relax();
+            continue; // busy wait
+        }    
 
     } while(!atomic_compare_exchange_weak(&q->rear, &rear, next_rear));
 
@@ -48,37 +52,13 @@ uint64_t nvme_fm_circular_pop_chnk(struct nvme_fm_circular_queue* q)
 
         // Queue is empty
         if (front == atomic_load(&q->rear))
-            return _fm_DEAD_VALUE;
+            return _FM_DEAD_VALUE;
         
         new_front = (front + 1) % _fm_QUEUE_SZ;
 
     } while(!atomic_compare_exchange_weak(&q->front, &front, new_front));
 
     return q->queue[front];
-}
-
-/* Get pid */
-uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
-{
-    struct nvme_fm_admin_node*     td    = td;     // Need to modify
-    struct nvme_fm_circular_queue* sub_q = td->sub_q;  // Need to modify
-
-    uint64_t chnk_id = slba * dev_info.lba_sz / dev_info.chnk_sz;
-    uint16_t pid;
-
-    if(slba == td->prev_lba)
-        pid =  td->prev_ruhid;
-
-    else
-    {
-        pid = fm_pids[chnk_id];
-        nvme_fm_circular_push_chnk(sub_q, chnk_id);
-    }
-
-    td->prev_lba   = slba + length;
-    td->prev_ruhid = pid;
-
-    return pid;
 }
 
 #ifdef fm_STAT
@@ -128,20 +108,51 @@ struct nvme_fm_chnk* nvme_fm_pop_chnk(struct nvme_fm_queue* q)
 }
 #endif
 
+/* Get Placement ID */
+uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
+{
+    read_lock(&admin_q_lock);
+    struct nvme_fm_admin_node* td = admin_q->head;     // Need to modify
+    if(!td)
+    {
+        read_unlock(&admin_q_lock);
+        return _FM_DEAD_VALUE;
+    }
+
+    struct nvme_fm_circular_queue* sub_q = td->sub_q;  // Need to modify
+    uint64_t chnk_id = slba * dev_info.lba_sz / dev_info.chnk_sz;
+    uint16_t pid = 0;
+
+    if(slba == td->prev_lba)
+        pid =  td->prev_ruhid;
+
+    else
+    {
+        pid = fm_pids[chnk_id];
+        nvme_fm_circular_push_chnk(sub_q, chnk_id);
+    }
+
+    read_unlock(&admin_q_lock);
+
+    td->prev_lba   = slba + length;
+    td->prev_ruhid = pid;
+
+    return pid;
+}
+
 /* Update Placement IDs */
 void nvme_fm_pid_update(void)
 {
     struct timespec current_time;
     uint64_t        cur_id[_FM_UPDATE_BATCH_SZ];
-    
-    write_lock(&admin_q_lock);
 
+    read_lock(&admin_q_lock);
     struct nvme_fm_admin_node* cur = admin_q->head;
+    read_unlock(&admin_q_lock);
 
     while(cur != NULL)
     {
         struct nvme_fm_circular_queue* cur_q = cur->sub_q;
-
         uint32_t valid_count = 0;
         
         for(uint32_t i = 0; i < _FM_UPDATE_BATCH_SZ; i++)
@@ -152,6 +163,7 @@ void nvme_fm_pid_update(void)
             valid_count += 1;
         }
 
+        write_lock(&admin_q_lock);
         for(uint32_t i = 0; i < valid_count; i++)
         {
             uint64_t             id         =  cur_id[i];
@@ -165,15 +177,17 @@ void nvme_fm_pid_update(void)
             cur_chnk->interval   =  nvme_time_diff(cur_chnk->access_time, current_time);
 
             uint64_t interval       = cur_chnk->interval;
-            uint32_t recency_weight = 1 << interval / decay_period;
+            uint32_t recency_weight = 1 << (interval / decay_period);
 
             cur_chnk->access_cnt /= recency_weight;
             uint32_t access_cnt  =  cur_chnk->access_cnt;
-            uint32_t ruh_id      =  1;
 
             // log2(access_cnt)
-            if (access_cnt > 0 && ruh_id < dev_info.max_ruh) 
-                while ((1U << ruh_id) <= access_cnt) ruh_id++;
+            // if (access_cnt > 0 && ruh_id < dev_info.max_ruh) 
+            //     while ((1U << ruh_id) <= access_cnt) ruh_id++;
+
+            // log2(access_cnt)
+            uint32_t ruh_id = (access_cnt > 0) ? (31 - __builtin_clz(access_cnt)) : 1;
 
             *cur_fm_pid = ruh_id;
 
@@ -181,7 +195,8 @@ void nvme_fm_pid_update(void)
 
             // For stat
             #ifdef FM_STAT
-            struct nvme_fm_chnk* stat_chnk = (struct nvme_fm_chnk*)malloc(sizeof(struct nvme_fm_chnk));
+            struct nvme_fm_chnk* stat_chnk = kmalloc(sizeof(struct nvme_fm_chnk));
+            if(!stat_chnk) return -ENOMEM;
 
             stat_chnk->fm_pid     = *cur_fm_pid;
             stat_chnk->chnk_id    =  cur_chnk->chnk_id;
@@ -192,11 +207,12 @@ void nvme_fm_pid_update(void)
             nvme_fm_push_chnk(cur->stat_q, stat_chnk);
             #endif
         }
+        write_unlock(&admin_q_lock);
 
+        read_lock(&admin_q_lock);
         cur = cur->next;
+        read_unlock(&admin_q_lock);
     }
-
-    write_unlock(&admin_q_lock);
 
     return;    
 }
@@ -205,10 +221,14 @@ void nvme_fm_pid_update(void)
 struct nvme_fm_admin_node* nvme_fm_td_init(void)
 {
     struct nvme_fm_admin_node* ret = kmalloc(sizeof(struct nvme_fm_admin_node), GFP_KERNEL);
-    if(!ret) return -ENOMEM;
+    if(!ret) return NULL;
 
-    ret->sub_q        = kmalloc(sizeof(struct nvme_fm_circular_queue), GFP_KERNEL);
-    if(!ret->sub_q) return -ENOMEM;
+    ret->sub_q = kmalloc(sizeof(struct nvme_fm_circular_queue), GFP_KERNEL);
+    if(!ret->sub_q)
+    {
+        kfree(ret);
+        return NULL;
+    } 
 
     ret->sub_q->front = 0;
     ret->sub_q->rear  = 0;
@@ -235,6 +255,7 @@ struct nvme_fm_admin_node* nvme_fm_td_init(void)
 
     #ifdef FM_STAT
     ret->stat_q = kmalloc(sizeof(struct nvme_fm_queue), GFP_KERNEL);
+    if(!stat_q) return NULL;
 
     ret->stat_q->head = NULL;
     ret->stat_q->tail = NULL;
@@ -249,6 +270,7 @@ void nvme_fm_td_dispose(struct nvme_fm_admin_node* fm_td)
     struct nvme_fm_admin_node* cur_node = fm_td;
     
     write_lock(&admin_q_lock);
+
     if (cur_node->prev)
         cur_node->prev->next = cur_node->next;
     else
@@ -262,8 +284,11 @@ void nvme_fm_td_dispose(struct nvme_fm_admin_node* fm_td)
     write_unlock(&admin_q_lock);
 
     #ifdef fm_STAT
-    nvme_fm_stat(cur_node->stat_q);
-    kfree(cur_node->stat_q);
+    if(fm_td->stat_q)
+    {
+        nvme_fm_stat(cur_node->stat_q);
+        kfree(cur_node->stat_q);
+    }
     #endif
     
     kfree(cur_node->sub_q);
