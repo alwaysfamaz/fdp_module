@@ -1,8 +1,12 @@
 #ifndef __FDP_MODULE_H__
 #define __FDP_MODULE_H__
 
-#ifndef FM_STAT
+// #ifndef FM_STAT
 // #define FM_STAT
+// #endif
+
+#ifndef FM_DEBUG
+#define FM_DEBUG
 #endif
 
 #include <linux/module.h>      
@@ -19,6 +23,11 @@
 #include <linux/timekeeping.h>  
 #include <linux/ktime.h>      
 #include <linux/atomic.h>  
+
+#ifdef FM_DEBUG
+#include <linux/kobject.h>  
+#include <linux/sysfs.h>  
+#endif
 
 /* Parameters */
 #define _FM_WDSZ             4U             
@@ -133,5 +142,13 @@ void                 nvme_fm_stat(struct nvme_fm_queue* stat_q);
 struct nvme_fm_chnk* nvme_fm_pop_chnk(struct nvme_fm_queue* q);
 void                 nvme_fm_push_chnk(struct nvme_fm_queue* q, struct nvme_fm_chnk* chnk);
 #endif /* FM_STAT */
+
+#ifdef FM_DEBUG
+static struct kobject *fdp_kobj;  // sysfs 객체
+static char fdp_debug_buf[256];   // 출력 버퍼
+static DEFINE_SPINLOCK(fdp_debug_lock);  // 동기화용 spinlock
+static ssize_t fdp_debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf);
+static void fdp_debug_log(const char *fmt, ...);
+#endif
 
 #endif /* __FDP_MODULE_H__*/

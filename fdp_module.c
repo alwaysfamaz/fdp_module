@@ -133,6 +133,8 @@ uint16_t nvme_get_fm_pid(uint64_t slba, uint16_t length)
     td->prev_lba   = slba + length;
     td->prev_ruhid = pid;
 
+    trace_printk("[FDP] Returning pid=%u for slba=%llu\n", pid, slba);
+
     return pid;
 }
 
@@ -197,6 +199,10 @@ void nvme_fm_pid_update(void)
             stat_chnk->access_cnt =  cur_chnk->access_cnt;
 
             nvme_fm_push_chnk(cur->stat_q, stat_chnk);
+            #endif
+
+            #ifdef FM_DEBUG
+            fdp_debug_log("[FDP] chnk_id=%llu, pid=%u", cur_chnk->chnk_id, cur_fm_pid);
             #endif
         }
         write_unlock(&admin_q_lock);
@@ -320,6 +326,31 @@ static int handler_pre(struct kprobe* p, struct pt_regs* regs)
     return 0;
 }
 
+#ifdef FM_DEBUG
+static ssize_t fdp_debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+    ssize_t ret;
+    spin_lock(&fdp_debug_lock);
+    ret = snprintf(buf, sizeof(fdp_debug_buf), "%s\n", fdp_debug_buf);
+    spin_unlock(&fdp_debug_lock);
+    return ret;
+}
+
+// sysfs 속성 정의
+static struct kobj_attribute fdp_debug_attr = __ATTR(fdp_debug, 0444, fdp_debug_show, NULL);
+
+static void fdp_debug_log(const char *fmt, ...)
+{
+    va_list args;
+    spin_lock(&fdp_debug_lock);
+    va_start(args, fmt);
+    vsnprintf(fdp_debug_buf, sizeof(fdp_debug_buf), fmt, args);
+    va_end(args);
+    spin_unlock(&fdp_debug_lock);
+}
+#endif
+
+
 /* Module init */
 static char dev_info_str[100] = "";
 module_param_string(dev_info, dev_info_str, sizeof(dev_info_str), 0644);
@@ -392,7 +423,33 @@ static int __init fdp_module_init(void)
         return ret;
     }
 
-    printk(KERN_INFO "FDP Module loaded: update_thread and nvme_setup_rw hooking\n");
+    #ifdef FM_DEBUG
+    // sysfs init
+    fdp_kobj = kobject_create_and_add("fdp_module", kernel_kobj);
+    if (!fdp_kobj)
+    {
+        unregister_kprobe(&kp);
+        kthread_stop(update_thread);
+        kfree(chnks);
+        kfree(fm_pids);
+        kfree(admin_q);
+        return -ENOMEM;
+    }
+
+    if (sysfs_create_file(fdp_kobj, &fdp_debug_attr.attr))
+    {
+        kobject_put(fdp_kobj);
+        unregister_kprobe(&kp);
+        kthread_stop(update_thread);
+        kfree(chnks);
+        kfree(fm_pids);
+        kfree(admin_q);
+        return -ENOMEM;
+    }
+    #endif
+
+    printk(KERN_INFO "FDP Module loaded: sysfs at /sys/kernel/fdp_debug\n");
+    printk(KERN_INFO "                 : update_thread and nvme_setup_rw hooking\n");
 
     return 0;
 }
@@ -405,8 +462,17 @@ static void __exit fdp_module_exit(void)
 
     unregister_kprobe(&kp);
 
+    #ifdef FM_DEBUG
+    if (fdp_kobj)
+    {
+        sysfs_remove_file(fdp_kobj, &fdp_debug_attr.attr);
+        kobject_put(fdp_kobj);
+    }
+    #endif
+
     kfree(chnks);
     kfree(fm_pids);
+    kfree(admin_q);
 
     printk(KERN_INFO "FDP Module unloaded\n");
 }
