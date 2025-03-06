@@ -10,5 +10,5 @@
 
 ## Make
 1. make
-2. Module load: modprobe fdp_module dev_info="tbytes:lba_sz:chnk_sz:max_ruh:decay_period"
+2. Module load: insmod fdp_module.ko dev_info="tbytes:lba_sz:chnk_sz:max_ruh:decay_period"
 3. Module unload: make uninstall

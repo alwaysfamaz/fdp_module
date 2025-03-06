@@ -1,0 +1,1 @@
+cmd_/home/yongsang/fdp_module/fdp_module.ko := ld -r -m elf_x86_64 -z noexecstack --build-id=sha1  -T scripts/module.lds -o /home/yongsang/fdp_module/fdp_module.ko /home/yongsang/fdp_module/fdp_module.o /home/yongsang/fdp_module/fdp_module.mod.o;  true
