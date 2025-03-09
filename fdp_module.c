@@ -336,7 +336,7 @@ static ssize_t fdp_debug_show(struct kobject *kobj, struct kobj_attribute *attr,
     return ret;
 }
 
-// sysfs 속성 정의
+// Defint sysfs attr
 static struct kobj_attribute fdp_debug_attr = __ATTR(fdp_debug, 0444, fdp_debug_show, NULL);
 
 static void fdp_debug_log(const char *fmt, ...)
