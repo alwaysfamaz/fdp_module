@@ -6,7 +6,7 @@
 // #endif
 
 #ifndef FM_DEBUG
-#define FM_DEBUG
+// #define FM_DEBUG
 #endif
 
 #include <linux/module.h>      
@@ -31,14 +31,8 @@
 
 /* Parameters */
 #define _FM_WDSZ             4U             
-// #define _FM_DEV_SZ           107373363200ULL // NVMeVirt (128GB)
-// #define _FM_DEV_SZ           1000204886016ULL // Real device (1TB)  
-// #define _FM_LBA_SZ           512ULL
-// #define _FM_CHNK_SZ          (2*1024*1024ULL) // 2MiB
-// #define _FM_MAX_RUH          15U              // 16 (0~15)
 #define _FM_QUEUE_SZ         256U
-#define _FM_DEAD_VALUE       0xDEAD       // magic number
-// #define _FM_DECAY_PERIOD     10ULL            // sec
+#define _FM_DEAD_VALUE       0xDEAD  // magic number
 #define _FM_MAX_THREAD_NUM   8U
 #define _FM_UPDATE_BATCH_SZ  1U
 

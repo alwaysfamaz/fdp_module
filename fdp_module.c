@@ -202,7 +202,8 @@ void nvme_fm_pid_update(void)
             #endif
 
             #ifdef FM_DEBUG
-            fdp_debug_log("[FDP] chnk_id=%llu, pid=%u", cur_chnk->chnk_id, cur_fm_pid);
+            if(cur_fm_pid > 1)
+                fdp_debug_log("[FDP] chnk_id=%llu, pid=%u", cur_chnk->chnk_id, cur_fm_pid);
             #endif
         }
         write_unlock(&admin_q_lock);
@@ -336,7 +337,10 @@ static ssize_t fdp_debug_show(struct kobject *kobj, struct kobj_attribute *attr,
     return ret;
 }
 
+<<<<<<< HEAD
 // Defint sysfs attr
+=======
+>>>>>>> 4dc578a (v0.0.1)
 static struct kobj_attribute fdp_debug_attr = __ATTR(fdp_debug, 0444, fdp_debug_show, NULL);
 
 static void fdp_debug_log(const char *fmt, ...)
@@ -419,6 +423,7 @@ static int __init fdp_module_init(void)
 
         kfree(chnks);
         kfree(fm_pids);
+        kfree(admin_q);
 
         return ret;
     }
@@ -449,7 +454,7 @@ static int __init fdp_module_init(void)
     #endif
 
     printk(KERN_INFO "FDP Module loaded: sysfs at /sys/kernel/fdp_debug\n");
-    printk(KERN_INFO "                 : update_thread and nvme_setup_rw hooking\n");
+    printk(KERN_INFO "                 | update_thread and nvme_setup_rw hooking\n");
 
     return 0;
 }

@@ -11,4 +11,5 @@
 ## Make
 1. make
 2. Module load: insmod fdp_module.ko dev_info="tbytes:lba_sz:chnk_sz:max_ruh:decay_period"
+    e.g., sudo insmod fdp_module.ko dev_info="107374182400:512:2097152:15:7"
 3. Module unload: make uninstall
