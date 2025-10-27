@@ -31,9 +31,9 @@ static struct nvme_fm_admin_q *admin_q;
 static struct nvme_dev_info    dev_info;
 static struct nvme_fm_chnk    *chnks;
 static struct task_struct     *update_thread;
-static struct kretprobe        krp;        /* kretprobe for nvme_setup_cmd */
+static struct kretprobe        krp;           /* kretprobe for nvme_setup_cmd */
 static u16                    *fm_pids;
-static u64                     decay_period; /* in ns */
+static u64                     decay_period;  /* in ns */
 static u64                     num_chnk;
 static rwlock_t                admin_q_lock;
 
@@ -259,8 +259,9 @@ void nvme_fm_pid_update(void)
             write_lock(&admin_q_lock);
             for (u32 i = 0; i < valid; i++) 
             {
-                u64 id = cur_id[i];
-                u16 *cur_fm_pid          = &fm_pids[id];
+                u64  id         = cur_id[i];
+                u16 *cur_fm_pid = &fm_pids[id];
+
                 struct nvme_fm_chnk *cch = &chnks[id];
 
                 ktime_get_ts64(&current_time);
@@ -477,9 +478,10 @@ static int setup_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 static int setup_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
     struct probe_ctx *ctx = (struct probe_ctx *)&ri->data;
-    struct request *req = ctx->req;
+    struct request   *req = ctx->req;
+
     void *pdu;
-    int op;
+    int   op;
 
     if (!req)
         return 0;
@@ -495,18 +497,18 @@ static int setup_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 
     {
         u8 *base = (u8 *)pdu;
-        unsigned int off = 40;  /* <-- magic offset */
+        unsigned int off = 40;  /* <-- magic offset, Need to modify */
 
         struct nvme_command *cmd = (struct nvme_command *)(base + off);
-        u8 opc = cmd->common.opcode;
+        u8                   opc = cmd->common.opcode;
 
         if (opc == nvme_cmd_write) 
         {
             struct nvme_rw_command *rw = &cmd->rw;
 
-            u64 slba  = le64_to_cpu(rw->slba);
-            u16 nlb0  = le16_to_cpu(rw->length); /* 0-based */
-            u16 pid   = nvme_get_fm_pid(slba, (u16)(nlb0 + 1));
+            u64 slba = le64_to_cpu(rw->slba);
+            u16 nlb0 = le16_to_cpu(rw->length); /* 0-based */
+            u16 pid  = nvme_get_fm_pid(slba, (u16)(nlb0 + 1));
 
             /* DTYPE=1 (Data Placement) in CDW12 */
             nvme_rw_set_dtype_dp(rw);

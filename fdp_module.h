@@ -59,8 +59,8 @@ struct nvme_dev_info
     u64 tbytes;        /* bytes total */
     u64 lba_sz;        /* bytes per LBA */
     u64 chnk_sz;       /* bytes per "chunk" */
-    u16 max_ruh;       /* #RUs per RG or RUH space */
-    u64 decay_period;  /* seconds (will be converted to nsec) */
+    u16 max_ruh;       /* #RUHs per RG */
+    u64 decay_period;  /* seconds */
 };
 
 struct nvme_fm_chnk 
@@ -69,10 +69,10 @@ struct nvme_fm_chnk
     u32 fm_pid;
 #endif
     u64               chnk_id;      /* sLBA / chnk_size */
-    u64               interval;     /* ns since last access */
+    u64               interval;     /* ns */
     u32               real_cnt;     /* raw access count */
-    u32               access_cnt;   /* decayed access count */
-    struct timespec64 access_time;  /* last access timestamp */
+    u32               access_cnt;   /* access count */
+    struct timespec64 access_time;  /* last access time */
 };
 
 struct nvme_fm_circular_queue 
